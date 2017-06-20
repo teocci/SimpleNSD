@@ -1,10 +1,15 @@
 package com.github.teocci.simplensd.ui;
 
+import android.content.ComponentName;
 import android.content.ContentResolver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.ServiceConnection;
+import android.content.SharedPreferences;
 import android.net.nsd.NsdServiceInfo;
+import android.os.Build;
 import android.os.Bundle;
-import android.os.Handler;
-import android.os.Message;
+import android.os.IBinder;
 import android.provider.Settings;
 import android.support.v7.app.AppCompatActivity;
 import android.util.Base64;
@@ -13,84 +18,90 @@ import android.view.WindowManager;
 import android.widget.EditText;
 import android.widget.TextView;
 
+import com.github.teocci.simplensd.NSDService;
 import com.github.teocci.simplensd.R;
-import com.github.teocci.simplensd.nio.SocketConnection;
+import com.github.teocci.simplensd.interfaces.ConnectionUpdateListener;
+import com.github.teocci.simplensd.model.StationInfo;
+import com.github.teocci.simplensd.utils.Config;
 import com.github.teocci.simplensd.utils.LogHelper;
-import com.github.teocci.simplensd.utils.NsdHelper;
 
 import java.math.BigInteger;
 import java.util.Random;
 
 /**
  * Created by teocci on 3/23/17.
- *
  */
 
-public class ClientModeActivity extends AppCompatActivity
+public class ClientModeActivity extends AppCompatActivity implements ConnectionUpdateListener
 {
     static final String TAG = LogHelper.makeLogTag(ClientModeActivity.class);
 
-    private NsdHelper nsdHelper;
-
     private TextView statusView;
-    private Handler updateHandler;
-    private SocketConnection connection;
+
+    private boolean isExit;
+    private Intent serviceIntent;
+    private ServiceConnection serviceConnection;
+    private NSDService.RemoteBinder binder;
+
+    private String stationName;
 
     @Override
     protected void onCreate(Bundle savedInstanceState)
     {
         super.onCreate(savedInstanceState);
-        setContentView(R.layout.activity_nsd);
-        statusView = (TextView) findViewById(R.id.status);
 
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
-        updateHandler = new Handler()
+        setContentView(R.layout.activity_nsd);
+        statusView = (TextView) findViewById(R.id.status);
+    }
+
+    @Override
+    protected void onResume()
+    {
+        super.onResume();
+
+        isExit = false;
+
+        final SharedPreferences sharedPreferences = getPreferences(Context.MODE_PRIVATE);
+        stationName = sharedPreferences.getString(Config.KEY_STATION_NAME, null);
+        if ((stationName == null) || stationName.isEmpty())
+            stationName = Build.MODEL;
+
+        if (!stationName.isEmpty()) {
+            final String title = getString(R.string.app_name) + ": " + stationName;
+            setTitle(title);
+        }
+
+        serviceIntent = new Intent(this, NSDService.class);
+        serviceIntent.putExtra(Config.EXTRA_DISPLAY_NAME, stationName);
+        serviceIntent.putExtra(Config.EXTRA_OPERATION_MODE, Config.CLIENT_MODE);
+        final ComponentName componentName = startService(serviceIntent);
+
+        serviceConnection = new ServiceConnection()
         {
-            @Override
-            public void handleMessage(Message msg)
+            public void onServiceConnected(ComponentName name, IBinder binder)
             {
-                String chatLine = msg.getData().getString("msg");
-                addChatLine(chatLine);
+                LogHelper.d(TAG, "onServiceConnected");
+                ClientModeActivity.this.binder = (NSDService.RemoteBinder) binder;
+                ClientModeActivity.this.binder.setUpdateReceiver(
+                        ClientModeActivity.this); // ConnectionUpdateListener
+            }
+
+            public void onServiceDisconnected(ComponentName name)
+            {
+                LogHelper.d(TAG, "onServiceDisconnected");
             }
         };
 
-        connection = new SocketConnection(updateHandler);
+        final boolean bindRC = bindService(serviceIntent, serviceConnection, BIND_AUTO_CREATE);
+        if (!bindRC)
+            serviceConnection = null;
+        LogHelper.d(TAG, "componentName=" + componentName + " bindRC=" + bindRC);
 
-        final String deviceID = getDeviceID(getContentResolver());
-        nsdHelper = new NsdHelper(this, deviceID);
-        nsdHelper.initializeNSDClient();
-    }
-
-    public void clickAdvertise(View v)
-    {
-        LogHelper.e(TAG, "clickAdvertise()");
-        // Register service
-        if (connection.getLocalPort() > -1) {
-            nsdHelper.registerService(connection.getLocalPort());
-            LogHelper.e(TAG, "RegisterService()");
-        } else {
-            LogHelper.d(TAG, "ServerSocket isn't bound.");
-        }
-    }
-
-    public void clickDiscover(View v)
-    {
-        LogHelper.e(TAG, "clickDiscover()");
-        nsdHelper.discoverServices();
-    }
-
-    public void clickConnect(View v)
-    {
-        LogHelper.e(TAG, "clickConnect()");
-        NsdServiceInfo service = nsdHelper.getChosenServiceInfo();
-        if (service != null) {
-            LogHelper.d(TAG, "Connecting.");
-            connection.connectToServer(service.getHost(), service.getPort());
-            LogHelper.d(TAG, "Connected");
-        } else {
-            LogHelper.d(TAG, "No service to connect to!");
-        }
+//        if (nsdHelper != null) {
+//            nsdHelper.discoverServices();
+//        }
     }
 
     public void clickSend(View v)
@@ -99,40 +110,24 @@ public class ClientModeActivity extends AppCompatActivity
         if (messageView != null) {
             String messageString = messageView.getText().toString();
             if (!messageString.isEmpty()) {
-                connection.sendMessage(messageString);
+                binder.sendMessage(messageString);
             }
             messageView.setText("");
         }
     }
 
-    public void addChatLine(String line)
-    {
-        statusView.append("\n" + line);
-    }
-
     @Override
     protected void onPause()
     {
-        if (nsdHelper != null) {
-            nsdHelper.stopDiscovery();
-        }
+//        if (nsdHelper != null) {
+//            nsdHelper.stopDiscovery();
+//        }
         super.onPause();
-    }
-
-    @Override
-    protected void onResume()
-    {
-        super.onResume();
-        if (nsdHelper != null) {
-            nsdHelper.discoverServices();
-        }
     }
 
     @Override
     protected void onDestroy()
     {
-        nsdHelper.tearDown();
-        connection.tearDown();
         super.onDestroy();
     }
 
@@ -162,5 +157,22 @@ public class ClientModeActivity extends AppCompatActivity
         }
 
         return Base64.encodeToString(bb, (Base64.NO_PADDING | Base64.NO_WRAP));
+    }
+
+    @Override
+    public void onStationListChanged(StationInfo[] stationInfo)
+    {
+
+    }
+
+    @Override
+    public void onMessageUpdate(String message)
+    {
+        addChatLine(message);
+    }
+
+    public void addChatLine(String line)
+    {
+        statusView.append("\n" + line);
     }
 }

@@ -3,15 +3,14 @@ package com.github.teocci.simplensd;
 import android.app.Service;
 import android.content.ContentResolver;
 import android.content.Intent;
+import android.net.nsd.NsdServiceInfo;
 import android.os.Binder;
-import android.os.Handler;
 import android.os.IBinder;
-import android.os.Message;
 import android.provider.Settings;
 import android.util.Base64;
 
-import com.github.teocci.simplensd.interfaces.UpdateReceiver;
-import com.github.teocci.simplensd.nio.SocketConnection;
+import com.github.teocci.simplensd.interfaces.ConnectionUpdateListener;
+import com.github.teocci.simplensd.interfaces.ServiceResolveListener;
 import com.github.teocci.simplensd.utils.Config;
 import com.github.teocci.simplensd.utils.LogHelper;
 import com.github.teocci.simplensd.utils.NsdHelper;
@@ -19,23 +18,16 @@ import com.github.teocci.simplensd.utils.NsdHelper;
 import java.math.BigInteger;
 import java.util.Random;
 
-public class NSDService extends Service
+public class NSDService extends Service implements ServiceResolveListener
 {
     private static final String TAG = LogHelper.makeLogTag(NSDService.class);
 
     private NsdHelper nsdHelper;
 
     private final RemoteBinder serviceBinder;
-    private UpdateReceiver updateReceiver;
-
-    private Handler updateHandler;
-    private SocketConnection connection;
-
     public NSDService()
     {
         serviceBinder = new RemoteBinder();
-        updateReceiver = null;
-        connection = new SocketConnection(updateHandler);
     }
 
     public void onCreate()
@@ -67,30 +59,11 @@ public class NSDService extends Service
 
         if (isServer) {
             nsdHelper.initializeNSDServer();
-            // Register service
-            if (connection.getLocalPort() > -1) {
-                nsdHelper.registerService(connection.getLocalPort());
-                LogHelper.e(TAG, "RegisterService()");
-            } else {
-                LogHelper.e(TAG, "ServerSocket isn't bound.");
-            }
         } else {
             nsdHelper.initializeNSDClient();
+            nsdHelper.setServiceResolveListener(this);
+            nsdHelper.discoverServices();
         }
-
-
-        updateHandler = new Handler()
-        {
-            @Override
-            public void handleMessage(Message msg)
-            {
-                String chatLine = msg.getData().getString("msg");
-//                addChatLine(chatLine);
-                if (updateReceiver != null) {
-                    updateReceiver.onMessageUpdate(chatLine);
-                }
-            }
-        };
 
 //        if (audioRecorder == null) {
 //            final String deviceID = getDeviceID(getContentResolver());
@@ -152,7 +125,7 @@ public class NSDService extends Service
 
         nsdHelper.stopDiscovery();
         nsdHelper.tearDown();
-        connection.tearDown();
+//        connection.tearDown();
 
         LogHelper.d(TAG, "onDestroy: done");
         super.onDestroy();
@@ -186,6 +159,25 @@ public class NSDService extends Service
         return Base64.encodeToString(bb, (Base64.NO_PADDING | Base64.NO_WRAP));
     }
 
+    @Override
+    public void onServiceResolved(NsdServiceInfo serviceInfo)
+    {
+
+    }
+
+    @Override
+    public void onResolveFailed(NsdServiceInfo serviceInfo, int errorCode)
+    {
+        LogHelper.e(TAG, "clickConnect()");
+        if (serviceInfo != null) {
+            LogHelper.d(TAG, "Connecting.");
+            connection.connectToServer(serviceInfo.getHost(), serviceInfo.getPort());
+            LogHelper.d(TAG, "Connected");
+        } else {
+            LogHelper.d(TAG, "No service to connect to!");
+        }
+    }
+
     /**
      * RemoteBinder Class should be used for the client Binder.  Because we know this service always
      * runs in the same process as its clients.
@@ -198,9 +190,14 @@ public class NSDService extends Service
             return NSDService.this;
         }
 
-        public void setUpdateReceiver(UpdateReceiver updateReceiver)
+        public void setUpdateReceiver(ConnectionUpdateListener connectionUpdateListener)
         {
-            NSDService.this.updateReceiver = updateReceiver;
+            nsdHelper.setConnectionUpdateListener(connectionUpdateListener);
+        }
+
+        public void sendMessage(String message)
+        {
+            nsdHelper.sendMessage(message);
         }
 
 //        public void setStationName(String stationName)

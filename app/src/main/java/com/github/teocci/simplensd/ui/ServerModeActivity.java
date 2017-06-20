@@ -19,16 +19,17 @@ import android.widget.TextView;
 
 import com.github.teocci.simplensd.NSDService;
 import com.github.teocci.simplensd.R;
-import com.github.teocci.simplensd.interfaces.UpdateReceiver;
+import com.github.teocci.simplensd.interfaces.ConnectionUpdateListener;
 import com.github.teocci.simplensd.model.StationInfo;
 import com.github.teocci.simplensd.utils.Config;
 import com.github.teocci.simplensd.utils.LogHelper;
 
 /**
  * Created by teocci on 3/23/17.
+ *
  */
 
-public class ServerModeActivity extends AppCompatActivity implements UpdateReceiver
+public class ServerModeActivity extends AppCompatActivity implements ConnectionUpdateListener
 {
     static final String TAG = LogHelper.makeLogTag(ServerModeActivity.class);
 
@@ -53,21 +54,52 @@ public class ServerModeActivity extends AppCompatActivity implements UpdateRecei
         statusView = (TextView) findViewById(R.id.status);
     }
 
-//    public void clickSend(View v)
-//    {
-//        EditText messageView = (EditText) this.findViewById(R.id.chatInput);
-//        if (messageView != null) {
-//            String messageString = messageView.getText().toString();
-//            if (!messageString.isEmpty()) {
-//                connection.sendMessage(messageString);
-//            }
-//            messageView.setText("");
-//        }
-//    }
-
-    public void addChatLine(String line)
+    @Override
+    protected void onResume()
     {
-        statusView.append("\n" + line);
+        super.onResume();
+
+        isExit = false;
+
+        final SharedPreferences sharedPreferences = getPreferences(Context.MODE_PRIVATE);
+        stationName = sharedPreferences.getString(Config.KEY_STATION_NAME, null);
+        if ((stationName == null) || stationName.isEmpty())
+            stationName = Build.MODEL;
+
+        if (!stationName.isEmpty()) {
+            final String title = getString(R.string.app_name) + ": " + stationName;
+            setTitle(title);
+        }
+
+        serviceIntent = new Intent(this, NSDService.class);
+        serviceIntent.putExtra(Config.EXTRA_DISPLAY_NAME, stationName);
+        serviceIntent.putExtra(Config.EXTRA_OPERATION_MODE, Config.SERVER_MODE);
+        final ComponentName componentName = startService(serviceIntent);
+
+        serviceConnection = new ServiceConnection()
+        {
+            public void onServiceConnected(ComponentName name, IBinder binder)
+            {
+                LogHelper.d(TAG, "onServiceConnected");
+                ServerModeActivity.this.binder = (NSDService.RemoteBinder) binder;
+                ServerModeActivity.this.binder.setUpdateReceiver(
+                        ServerModeActivity.this); // ConnectionUpdateListener
+            }
+
+            public void onServiceDisconnected(ComponentName name)
+            {
+                LogHelper.d(TAG, "onServiceDisconnected");
+            }
+        };
+
+        final boolean bindRC = bindService(serviceIntent, serviceConnection, BIND_AUTO_CREATE);
+        if (!bindRC)
+            serviceConnection = null;
+        LogHelper.d(TAG, "componentName=" + componentName + " bindRC=" + bindRC);
+
+//        if (nsdHelper != null) {
+//            nsdHelper.discoverServices();
+//        }
     }
 
     @Override
@@ -112,54 +144,6 @@ public class ServerModeActivity extends AppCompatActivity implements UpdateRecei
     }
 
     @Override
-    protected void onResume()
-    {
-        super.onResume();
-
-        isExit = false;
-
-        final SharedPreferences sharedPreferences = getPreferences(Context.MODE_PRIVATE);
-        stationName = sharedPreferences.getString(Config.KEY_STATION_NAME, null);
-        if ((stationName == null) || stationName.isEmpty())
-            stationName = Build.MODEL;
-
-        if (!stationName.isEmpty()) {
-            final String title = getString(R.string.app_name) + ": " + stationName;
-            setTitle(title);
-        }
-
-        serviceIntent = new Intent(this, NSDService.class);
-        serviceIntent.putExtra(Config.EXTRA_DISPLAY_NAME, stationName);
-        serviceIntent.putExtra(Config.EXTRA_OPERATION_MODE, Config.SERVER_MODE);
-        final ComponentName componentName = startService(serviceIntent);
-
-        serviceConnection = new ServiceConnection()
-        {
-            public void onServiceConnected(ComponentName name, IBinder binder)
-            {
-                LogHelper.d(TAG, "onServiceConnected");
-                ServerModeActivity.this.binder = (NSDService.RemoteBinder) binder;
-//                ServerModeActivity.this.binder.setStateListener(
-//                        ServerModeActivity.this); // ChannelStateListener
-            }
-
-            public void onServiceDisconnected(ComponentName name)
-            {
-                LogHelper.d(TAG, "onServiceDisconnected");
-            }
-        };
-
-        final boolean bindRC = bindService(serviceIntent, serviceConnection, BIND_AUTO_CREATE);
-        if (!bindRC)
-            serviceConnection = null;
-        LogHelper.d(TAG, "componentName=" + componentName + " bindRC=" + bindRC);
-
-//        if (nsdHelper != null) {
-//            nsdHelper.discoverServices();
-//        }
-    }
-
-    @Override
     protected void onDestroy()
     {
 //        nsdHelper.tearDown();
@@ -177,5 +161,10 @@ public class ServerModeActivity extends AppCompatActivity implements UpdateRecei
     public void onMessageUpdate(String message)
     {
         addChatLine(message);
+    }
+
+    public void addChatLine(String line)
+    {
+        statusView.append("\n" + line);
     }
 }

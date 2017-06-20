@@ -6,7 +6,7 @@ import com.github.teocci.simplensd.model.StationInfo;
  * Created by teocci on 3/23/17.
  */
 
-public interface UpdateReceiver
+public interface ConnectionUpdateListener
 {
     void onStationListChanged(StationInfo[] stationInfo);
 

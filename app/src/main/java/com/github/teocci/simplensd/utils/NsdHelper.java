@@ -3,7 +3,16 @@ package com.github.teocci.simplensd.utils;
 import android.content.Context;
 import android.net.nsd.NsdManager;
 import android.net.nsd.NsdServiceInfo;
+import android.os.Handler;
+import android.os.Message;
 
+import com.github.teocci.simplensd.BuildConfig;
+import com.github.teocci.simplensd.interfaces.ConnectionUpdateListener;
+import com.github.teocci.simplensd.interfaces.ServiceResolveListener;
+import com.github.teocci.simplensd.nio.SocketConnection;
+
+import java.util.Iterator;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
@@ -25,8 +34,16 @@ public class NsdHelper
     private NsdManager.RegistrationListener registrationListener;
     private NsdServiceInfo serviceInfo;
 
+    private ServiceResolveListener serviceResolveListener;
+    private ConnectionUpdateListener connectionUpdateListener;
+
+
     private final ReentrantLock reentrantLock;
     private Condition condition;
+    private CountDownLatch latchSynchronizer;
+
+    private Handler updateHandler;
+    private SocketConnection connection;
 
     private boolean isDiscoveryStarted;
 
@@ -41,19 +58,47 @@ public class NsdHelper
         this.deviceID = deviceID;
         this.reentrantLock = new ReentrantLock();
         this.isDiscoveryStarted = false;
+
+        this.serviceResolveListener = null;
+        this.connectionUpdateListener = null;
+
+        this.connection = new SocketConnection(updateHandler);
         this.nsdManager = (NsdManager) context.getSystemService(Context.NSD_SERVICE);
     }
 
     public void initializeNSDServer()
     {
         initializeRegistrationListener();
+        // Register service
+        if (connection.getLocalPort() > -1) {
+            registerService(connection.getLocalPort());
+            LogHelper.e(TAG, "RegisterService()");
+        } else {
+            LogHelper.e(TAG, "ServerSocket isn't bound.");
+        }
+        initializeHandler();
     }
 
     public void initializeNSDClient()
     {
         initializeDiscoveryListener();
-        discoverServices();
         initializeResolveListener();
+        initializeHandler();
+    }
+
+    public void initializeHandler()
+    {
+        updateHandler = new Handler()
+        {
+            @Override
+            public void handleMessage(Message msg)
+            {
+                String chatLine = msg.getData().getString("msg");
+                if (connectionUpdateListener != null) {
+                    connectionUpdateListener.onMessageUpdate(chatLine);
+                }
+            }
+        };
     }
 
     public void initializeDiscoveryListener()
@@ -79,21 +124,30 @@ public class NsdHelper
             public void onServiceFound(NsdServiceInfo service)
             {
                 LogHelper.e(TAG, "Service discovery success" + service);
-                if (!service.getServiceType().equals(Config.SERVICE_TYPE + '.')) {
-                    LogHelper.e(TAG, "Unknown Service Type: " + service.getServiceType());
-                } else if (service.getServiceName().equals(serviceName)) {
-                    LogHelper.e(TAG, "Same machine: " + serviceName);
-                } else if (service.getServiceName().contains(serviceName)) {
-                    LogHelper.e(TAG, "resolveService: " + serviceName);
-                    nsdManager.resolveService(service, resolveListener);
+                reentrantLock.lock();
+                try {
+                    if (BuildConfig.DEBUG && (latchSynchronizer != null))
+                        throw new AssertionError();
+
+                    if (!service.getServiceType().equals(Config.SERVICE_TYPE + '.')) {
+                        LogHelper.e(TAG, "Unknown Service Type: " + service.getServiceType());
+                    } else if (service.getServiceName().equals(serviceName)) {
+                        LogHelper.e(TAG, "Same machine: " + serviceName);
+                    } else if (service.getServiceName().contains(serviceName)) {
+                        LogHelper.e(TAG, "resolveService: " + serviceName);
+                        nsdManager.resolveService(service, resolveListener);
+                    }
+
+                } finally {
+                    reentrantLock.unlock();
                 }
             }
 
             @Override
-            public void onServiceLost(NsdServiceInfo service)
+            public void onServiceLost(NsdServiceInfo nsdServiceInfo)
             {
-                LogHelper.e(TAG, "service lost" + service);
-                if (serviceInfo == service) {
+                LogHelper.e(TAG, "service lost" + nsdServiceInfo);
+                if (serviceInfo == nsdServiceInfo) {
                     serviceInfo = null;
                 }
             }
@@ -140,21 +194,29 @@ public class NsdHelper
         resolveListener = new NsdManager.ResolveListener()
         {
             @Override
-            public void onResolveFailed(NsdServiceInfo serviceInfo, int errorCode)
+            public void onResolveFailed(NsdServiceInfo nsdServiceInfo, int errorCode)
             {
                 LogHelper.e(TAG, "Resolve failed" + errorCode);
+
+                serviceResolveListener.onResolveFailed(nsdServiceInfo, errorCode);
             }
 
             @Override
-            public void onServiceResolved(NsdServiceInfo serviceInfo)
+            public void onServiceResolved(NsdServiceInfo nsdServiceInfo)
             {
-                LogHelper.e(TAG, "Resolve Succeeded. " + serviceInfo);
+                LogHelper.e(TAG, "Resolve Succeeded. " + nsdServiceInfo);
 
-                if (serviceInfo.getServiceName().equals(serviceName)) {
-                    LogHelper.e(TAG, "Same IP.");
-                    return;
+                reentrantLock.lock();
+                try {
+                    if (nsdServiceInfo.getServiceName().equals(serviceName)) {
+                        LogHelper.e(TAG, "Same IP.");
+                        return;
+                    }
+                    serviceResolveListener.onServiceResolved(nsdServiceInfo);
+//                    NsdHelper.this.nsdServiceInfo = nsdServiceInfo;
+                } finally {
+                    reentrantLock.unlock();
                 }
-                NsdHelper.this.serviceInfo = serviceInfo;
             }
         };
     }
@@ -164,23 +226,23 @@ public class NsdHelper
         registrationListener = new NsdManager.RegistrationListener()
         {
             @Override
-            public void onServiceRegistered(NsdServiceInfo NsdServiceInfo)
+            public void onServiceRegistered(NsdServiceInfo nsdServiceInfo)
             {
-                serviceName = NsdServiceInfo.getServiceName();
+                serviceName = nsdServiceInfo.getServiceName();
             }
 
             @Override
-            public void onRegistrationFailed(NsdServiceInfo arg0, int arg1)
-            {
-            }
-
-            @Override
-            public void onServiceUnregistered(NsdServiceInfo arg0)
+            public void onRegistrationFailed(NsdServiceInfo nsdServiceInfo, int errorCode)
             {
             }
 
             @Override
-            public void onUnregistrationFailed(NsdServiceInfo serviceInfo, int errorCode)
+            public void onServiceUnregistered(NsdServiceInfo nsdServiceInfo)
+            {
+            }
+
+            @Override
+            public void onUnregistrationFailed(NsdServiceInfo nsdServiceInfo, int errorCode)
             {
             }
         };
@@ -188,18 +250,18 @@ public class NsdHelper
 
     public void registerService(int port)
     {
-        NsdServiceInfo serviceInfo = new NsdServiceInfo();
-        serviceInfo.setPort(port);
+        NsdServiceInfo nsdServiceInfo = new NsdServiceInfo();
+        nsdServiceInfo.setPort(port);
         final String serviceName = Config.SERVICE_NAME +
                 Config.SERVICE_NAME_SEPARATOR +
                 deviceID +
                 Config.SERVICE_NAME_SEPARATOR;
-        serviceInfo.setServiceName(serviceName);
-        serviceInfo.setServiceType(Config.SERVICE_TYPE);
+        nsdServiceInfo.setServiceName(serviceName);
+        nsdServiceInfo.setServiceType(Config.SERVICE_TYPE);
 
         LogHelper.e(TAG, "registerService() | port: " + port);
         nsdManager.registerService(
-                serviceInfo, NsdManager.PROTOCOL_DNS_SD, registrationListener);
+                nsdServiceInfo, NsdManager.PROTOCOL_DNS_SD, registrationListener);
     }
 
     public void discoverServices()
@@ -248,6 +310,52 @@ public class NsdHelper
             Thread.currentThread().interrupt();
     }
 
+    public void stop(CountDownLatch stopLatch)
+    {
+        reentrantLock.lock();
+        try {
+            if (this.latchSynchronizer != null) {
+                // Channel is being stopped, should not happen.
+                if (BuildConfig.DEBUG)
+                    throw new AssertionError();
+            } else if (connection != null) {
+                this.latchSynchronizer = stopLatch;
+
+                if (registrationListener == null) {
+                    // Acceptor is not started yet
+                    LogHelper.e(TAG, ": wait channelAcceptor");
+                    if (BuildConfig.DEBUG && (localPort != -1))
+                        throw new AssertionError();
+                } else {
+                    LogHelper.e(TAG, ": unregister service");
+                    nsdManager.unregisterService(registrationListener);
+                }
+            } else {
+                // ChannelAcceptor == null
+                stopLatch.countDown();
+            }
+
+            // Discovery is stopped now, onServiceFound()/onServiceLost() will not be called any more.
+            final Iterator<Map.Entry<String, ServiceInfo>> it = serviceInfo.entrySet().iterator();
+            while (it.hasNext()) {
+                final Map.Entry<String, ServiceInfo> entry = it.next();
+                final String serviceName = entry.getKey();
+                final ServiceInfo serviceInfo = entry.getValue();
+                if (((resolveListener != null) && this.serviceName.equals(serviceName)) ||
+                        (serviceInfo.connector != null) ||
+                        (serviceInfo.session != null)) {
+                    serviceInfo.nsdServiceInfo = null;
+                } else
+                    it.remove();
+            }
+
+            if (resolveListener == null)
+                stopLatch.countDown();
+        } finally {
+            reentrantLock.unlock();
+        }
+    }
+
     public NsdServiceInfo getChosenServiceInfo()
     {
         return serviceInfo;
@@ -257,6 +365,9 @@ public class NsdHelper
     {
         if (registrationListener != null) {
             nsdManager.unregisterService(registrationListener);
+        }
+        if (connection != null) {
+            connection.tearDown();
         }
     }
 
@@ -274,4 +385,35 @@ public class NsdHelper
     {
         return registrationListener;
     }
+
+    public void setServiceResolveListener(ServiceResolveListener serviceResolveListener)
+    {
+        this.serviceResolveListener = serviceResolveListener;
+    }
+
+    public void setConnectionUpdateListener(ConnectionUpdateListener connectionUpdateListener)
+    {
+        this.connectionUpdateListener = connectionUpdateListener;
+    }
+
+    private static class ServiceInfo
+    {
+        public NsdServiceInfo nsdServiceInfo;
+        public int nsdUpdates;
+//        public Connector connector;
+//        public Session session;
+        public String stationName;
+        public String address;
+        public int state;
+        public long ping;
+    }
+
+    private static class SessionInfo
+    {
+        public String stationName;
+        public String address;
+        public int state;
+        public long ping;
+    }
+
 }

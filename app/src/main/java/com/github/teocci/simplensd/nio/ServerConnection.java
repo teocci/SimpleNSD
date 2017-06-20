@@ -7,6 +7,10 @@ import com.github.teocci.simplensd.utils.LogHelper;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.ServerSocket;
+import java.net.Socket;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Created by teocci on 3/22/17.
@@ -55,13 +59,24 @@ public class ServerConnection
 
                 while (!Thread.currentThread().isInterrupted()) {
                     LogHelper.d(TAG, "ServerSocket Created, awaiting connection");
-                    connection.setSocket(serverSocket.accept());
+//                    connection.setSocket(serverSocket.accept());
+                    // accept a new connection
+                    Socket client = serverSocket.accept();
+                    // start a new ServerThread to handle the connection and send
+                    // output to the client
+
+                    ClientConnection clientConnection = new ClientConnection(client.getInetAddress(), client.getPort());
+                    connection.getClientConnections().put(client, clientConnection);
+                    int a = connection.getNumThreads().incrementAndGet();
+                    LogHelper.d(TAG,"Thread " + a + " started.");
+
                     LogHelper.d(TAG, "Connected.");
-                    if (connection.getClientConnection() == null) {
-                        int port = connection.getSocket().getPort();
-                        InetAddress address = connection.getSocket().getInetAddress();
-                        connection.connectToServer(address, port);
-                    }
+
+//                    if (connection.getClientConnection() == null) {
+//                        int port = connection.getSocket().getPort();
+//                        InetAddress address = connection.getSocket().getInetAddress();
+//                        connection.connectToServer(address, port);
+//                    }
                 }
             } catch (IOException e) {
                 LogHelper.e(TAG, "Error creating ServerSocket: ", e);

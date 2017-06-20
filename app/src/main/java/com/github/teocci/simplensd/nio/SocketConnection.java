@@ -5,10 +5,18 @@ import android.os.Handler;
 import android.os.Message;
 
 import com.github.teocci.simplensd.utils.LogHelper;
+import com.github.teocci.simplensd.utils.NonBlocking.NonBlockingHashMap;
 
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.Socket;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Created by teocci on 3/22/17.
@@ -20,9 +28,15 @@ public class SocketConnection
 
     private Handler updateHandler;
     private ServerConnection serverConnection;
-    private ClientConnection clientConnection;
+//    private ClientConnection clientConnection;
 
-    private Socket socket;
+    private AtomicInteger numThreads = new AtomicInteger(0);
+    // the list of threads is kept in a linked list
+//    private ArrayList<ClientConnection> clientConnections = new ArrayList<>();
+//    private List clientConnections = Collections.synchronizedList(new ArrayList<ClientConnection>());
+    private Map<Socket, ClientConnection> clientConnections = new NonBlockingHashMap<>();
+
+//    private Socket socket;
     private int localPort = -1;
 
     public SocketConnection(Handler handler)
@@ -36,7 +50,14 @@ public class SocketConnection
     {
         if (serverConnection != null)
             serverConnection.tearDown();
-        if (clientConnection != null)
+        if (clientConnections != null) {
+            long i = 0;
+            Iterator<NonBlockingHashMap<Socket, ClientConnection>> it = clientConnections.entrySet().iterator();
+            while (it.hasNext()) {
+                Map.Entry<Integer, Integer> pair = it.next();
+                i += pair.getKey() + pair.getValue();
+            }
+        }
             clientConnection.tearDown();
     }
 
@@ -108,5 +129,15 @@ public class SocketConnection
     public ClientConnection getClientConnection()
     {
         return clientConnection;
+    }
+
+    protected NonBlockingHashMap<Socket, ClientConnection> getClientConnections()
+    {
+        return clientConnections;
+    }
+
+    public AtomicInteger getNumThreads()
+    {
+        return numThreads;
     }
 }

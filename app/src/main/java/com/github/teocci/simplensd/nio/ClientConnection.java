@@ -23,19 +23,20 @@ public class ClientConnection
 {
     private static final String TAG = LogHelper.makeLogTag(ClientConnection.class);
 
-    private InetAddress mAddress;
-    private int PORT;
+    private InetAddress serverInetAddress;
+    private int serverPort;
 
     private Thread sendThread;
     private Thread receiveThread;
 
+    private Socket clientSocket = null;
     private SocketConnection connection;
 
     protected ClientConnection(InetAddress address, int port)
     {
         LogHelper.d(TAG, "Creating chatClient");
-        this.mAddress = address;
-        this.PORT = port;
+        this.serverInetAddress = address;
+        this.serverPort = port;
 
         sendThread = new Thread(new SendingThread());
         sendThread.start();
@@ -49,7 +50,7 @@ public class ClientConnection
     public void tearDown()
     {
         try {
-            connection.getSocket().close();
+            clientSocket.close();
         } catch (IOException ioe) {
             LogHelper.e(TAG, "Error when closing server socket.");
         }
@@ -58,7 +59,7 @@ public class ClientConnection
     public void sendMessage(String msg)
     {
         try {
-            Socket socket = connection.getSocket();
+            Socket socket = clientSocket;
             if (socket == null) {
                 LogHelper.d(TAG, "Socket is null, wtf?");
             } else if (socket.getOutputStream() == null) {
@@ -89,7 +90,7 @@ public class ClientConnection
             BufferedReader input;
             try {
                 input = new BufferedReader(new InputStreamReader(
-                        connection.getSocket().getInputStream()));
+                        clientSocket.getInputStream()));
                 while (!Thread.currentThread().isInterrupted()) {
 
                     String messageStr = null;
@@ -124,8 +125,8 @@ public class ClientConnection
         public void run()
         {
             try {
-                if (connection.getSocket() == null) {
-                    connection.setSocket(new Socket(mAddress, PORT));
+                if (clientSocket == null) {
+                    clientSocket = new Socket(serverInetAddress, serverPort);
                     LogHelper.d(TAG, "Client-side socket initialized.");
 
                 } else {
@@ -134,7 +135,6 @@ public class ClientConnection
 
                 receiveThread = new Thread(new ReceivingThread());
                 receiveThread.start();
-
             } catch (UnknownHostException e) {
                 LogHelper.d(TAG, "Initializing socket failed, UHE", e);
             } catch (IOException e) {
